@@ -1,0 +1,623 @@
+---
+title: "All sets Classification method"
+author: "Geoffrey Thompson et al"
+date: "May 2021"
+output:
+  pdf_document: default
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE)
+```
+
+
+
+# Classification and matching of fracture surfaces
+
+This workbook computes and saves the log odds for models trained using all nine images and tested on consecutive subsets of size $k$ for $k = 2, 3, \ldots 9$. There are four different sets of knives that are used as training sets. This workbook computes for one specific setting of the degrees of freedom parameter. To generate the entire set of values, change the $df$ variable in the second chunk. This only computes it for one setting of $df$ in order to save time and space. To reproduce the analysis, run for the desired settings of $df$ (change the value in the `matnorm` chunk) and combine the resulting outputs.
+
+
+```{r loadingone, echo=FALSE,warnings=F,message=FALSE, fig.cap="Cross-correlations for individual images in matching and non-matching surfaces on Fisher-transformed axes for two different sets of 9 knives with 9 images per knife. True matches and true non-matches can be distinguished in this example by features in these two frequency ranges. The correlations between individual images in the 5-10  and 10-20  frequency ranges are plotted on Fisher z-transformed coordinate axes."}
+library('scales')
+library('ggplot2')
+library('lme4')
+library('psych')
+library('reshape2')
+library('MASS')
+devtools::load_all('MixMatrix_0.1.0')
+library('CholWishart')
+library('dplyr')
+library('tidyr')
+
+
+
+cor.set1 = read.csv(file =   "data/Correlationsset1.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set2 = read.csv(file =   "data/Correlationsset2.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set3 = read.csv(file =   "data/Correlationsset3.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set4 = read.csv(file =   "data/Correlations S-10-9-02-truncated.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set5 = read.csv(file =   "data/Correlations K-9-9-truncated.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set6 = read.csv(file =   "data/Correlations S-10-9-10-truncated.csv", check.names = FALSE, header = TRUE)[,-1]
+                  
+
+totalcorset = rbind(cor.set1,cor.set5, cor.set4, cor.set6)
+
+totalcorset$zfive = fisherz(totalcorset$`5-10`)
+totalcorset$zten = fisherz(totalcorset$`10-20`)
+totalcorset$repetition = factor(totalcorset$set)
+totalcorset$img = factor(totalcorset$img)
+matchset = totalcorset[totalcorset$match == "match",]
+matchset = droplevels(matchset)
+fisher_trans = function() trans_new("fisher", function(x) psych::fisherz(x), 
+                                    function(x) psych::fisherz2r(x))
+qplot(data = rbind(cor.set1,cor.set5), `5-10`,`10-20`, color = match,
+      xlab="Correlations in 5-10 frequency range",
+      ylab="Correlations in 10-20 frequency range", alpha = I(0.5)) + 
+      
+      theme_bw() + coord_trans(x = "fisher", y = "fisher") + 
+  scale_x_continuous(breaks = c(-5., -.25, 0, .25, .5, .6, .7, .8, .9, .95, .99)) +
+  scale_y_continuous(breaks = c(-5., -.25, 0, .25, .5, .6, .7, .8, .9, .95, .99)) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  theme(legend.title=element_blank())
+
+
+
+lengthen <- function(n, k){
+  ret = matrix(0, nrow = (n-k+1), ncol = k)
+  for(i in seq(n-k+1)) ret[i,] = i-1+seq(k)
+  
+  ret
+}
+
+```
+
+
+
+
+# Training first model
+
+This code chunk trains the model on one of the sets and outputs the model object.
+
+
+```{r matnorm, echo=F}
+devtools::load_all('/home/gzt/Documents/MixMatrix_0.1.0')
+library('ggplot2')
+keep.vars = c("knife","img","match","zfive","zten","repetition")
+corset.shaped = reshape(totalcorset[,keep.vars], idvar = c("knife","match","repetition"), timevar = "img", direction = "wide")
+matchlabels = corset.shaped$match[corset.shaped$repetition == "1"]
+#matchlabels = corset.shaped$match
+dims = dim(corset.shaped)
+df = 30
+knifematrix = matrix(unlist(corset.shaped[,4:21]),ncol = 18)
+knifearray = array(t(knifematrix),dim = c(2,9,dims[1]))
+knifematrix.part = knifematrix[corset.shaped$repetition == "1",]
+
+knifematrix.partarray = array(t(knifematrix.part),dim = c(2,9,81))
+matchingknives = knifematrix.partarray[,,matchlabels == "match"]
+nonmatchingknives = knifematrix.partarray[,,matchlabels != "match"]
+
+matching.fit.one = matching.fit = MLmatrixt(df = df,  matchingknives,
+                row.mean = TRUE, col.variance = "AR(1)")
+unmatched.fit.one = unmatched.fit = MLmatrixt(df = df,  nonmatchingknives,
+                row.mean = TRUE, col.variance = "AR(1)")
+
+
+str(matching.fit.one)
+
+classes =  dmatrixt(knifearray,mean = matching.fit$mean,
+                                  U = matching.fit$U, V = matching.fit$var*matching.fit$V, log = TRUE, df = df) - 
+                  dmatrixt(knifearray,mean = unmatched.fit$mean,
+                                  U = unmatched.fit$U, V = unmatched.fit$var*unmatched.fit$V, log = TRUE, df = df)
+plotdf = data.frame(match = corset.shaped$match, 
+                      set = corset.shaped$repetition, 
+                      classes = classes,
+                      train = "1")
+
+newfacetlabels = c("K-1-1" = "K-9-06 rep 1", "K-1-2" = "K-9-06 rep 2", "K-1-3" = "K-9-06 rep 3", "K-2" = "K-9-9-01", "S-1" = "S-10-9-10-01", "S-10-09-02-01" = "S-2")
+
+
+resultsdf = plotdf
+
+```
+
+
+
+```{r continued}
+
+# df = 5
+matchlabels = corset.shaped$match[corset.shaped$repetition == "K-9-9-01"]
+#matchlabels = corset.shaped$match
+dims = dim(corset.shaped)
+
+knifematrix = matrix(unlist(corset.shaped[,4:21]),ncol = 18)
+knifearray = array(t(knifematrix),dim = c(2,9,dims[1]))
+knifematrix.part = knifematrix[corset.shaped$repetition == "K-9-9-01",]
+
+knifematrix.partarray = array(t(knifematrix.part),dim = c(2,9,81))
+matchingknives = knifematrix.partarray[,,matchlabels == "match"]
+nonmatchingknives = knifematrix.partarray[,,matchlabels != "match"]
+
+matching.fit.K9 = matching.fit = MLmatrixt(df = df,  matchingknives,
+                row.mean = TRUE, col.variance = "AR(1)")
+unmatched.fit.K9 = unmatched.fit = MLmatrixt(df = df,  nonmatchingknives,
+                row.mean = TRUE, col.variance = "AR(1)")
+
+classes =  dmatrixt(knifearray,mean = matching.fit$mean,
+                                  U = matching.fit$U, V = matching.fit$var*matching.fit$V, log = TRUE, df = df) - 
+                  dmatrixt(knifearray,mean = unmatched.fit$mean,
+                                  U = unmatched.fit$U, V = unmatched.fit$var*unmatched.fit$V, log = TRUE, df = df)
+plotdf = data.frame(match = corset.shaped$match, 
+                      set = corset.shaped$repetition, 
+                      classes = classes,
+                      train = "K-9-9-01")
+
+
+resultsdf = rbind(resultsdf,plotdf)
+
+
+knifematrix.part = knifematrix[corset.shaped$repetition == "S-10-09-02-01",]
+matchlabels = corset.shaped$match[corset.shaped$repetition == "S-10-09-02-01"]
+
+knifematrix.partarray = array(t(knifematrix.part),dim = c(2,9,100))
+matchingknives = knifematrix.partarray[,,matchlabels == "match"]
+nonmatchingknives = knifematrix.partarray[,,matchlabels != "match"]
+
+matching.fit.S1009 = matching.fit = MLmatrixt(df = df,  matchingknives,
+                row.mean = TRUE, col.variance = "AR(1)")
+unmatched.fit.S1009 = unmatched.fit = MLmatrixt(df = df,  nonmatchingknives,
+                row.mean = TRUE, col.variance = "AR(1)")
+
+
+
+
+classes =  dmatrixt(knifearray,mean = matching.fit$mean,
+                                  U = matching.fit$U, V = matching.fit$var*matching.fit$V, log = TRUE, df = df) - 
+                  dmatrixt(knifearray,mean = unmatched.fit$mean,
+                                  U = unmatched.fit$U, V = unmatched.fit$var*unmatched.fit$V, log = TRUE, df = df)
+plotdf = data.frame(match = corset.shaped$match, 
+                      set = corset.shaped$repetition, 
+                      classes = classes,
+                      train = "S-10-09-02-01")
+
+
+resultsdf = rbind(resultsdf,plotdf)
+
+
+
+
+knifematrix.part = knifematrix[corset.shaped$repetition == "S-10-9-10-01",]
+matchlabels = corset.shaped$match[corset.shaped$repetition == "S-10-9-10-01"]
+
+knifematrix.partarray = array(t(knifematrix.part),dim = c(2,9,100))
+matchingknives = knifematrix.partarray[,,matchlabels == "match"]
+nonmatchingknives = knifematrix.partarray[,,matchlabels != "match"]
+
+matching.fit.S10910 = matching.fit = MLmatrixt(df = df,  matchingknives,
+                row.mean = TRUE, col.variance = "AR(1)")
+unmatched.fit.S10910 = unmatched.fit = MLmatrixt(df = df,  nonmatchingknives,
+                row.mean = TRUE, col.variance = "AR(1)")
+
+
+
+
+classes =  dmatrixt(knifearray,mean = matching.fit$mean,
+                                  U = matching.fit$U, V = matching.fit$var*matching.fit$V, log = TRUE, df = df) - 
+                  dmatrixt(knifearray,mean = unmatched.fit$mean,
+                                  U = unmatched.fit$U, V = unmatched.fit$var*unmatched.fit$V, log = TRUE, df = df)
+plotdf = data.frame(match = corset.shaped$match, 
+                      set = corset.shaped$repetition, 
+                      classes = classes,
+                      train = "S-10-9-10-01")
+
+
+resultsdf = rbind(resultsdf,plotdf)
+
+
+```
+
+
+
+```{r othergraph, fig.cap = "The log-odds (base 10) for classifiers trained, using 9 images per surface, on each set of surfaces and tested on all sets of surfaces. Log-odds greater than 0 indicate classification as a match."}
+
+newfacetlabels = c("1" = "K-9-06 rep 1", "2" = "K-9-06 rep 2", "3" = "K-9-06 rep 3", "K-9-9-01" = "K-9-9-01", "S-10-9-10-01" = "S-10-9-10-01", "S-10-09-02-01" = "S-10-09-02-01")
+
+
+labeldf = data.frame(train = c("1","2","3","K-9-9-01","S-10-9-10-01","S-10-09-02-01") ,
+                     labels =  c("K-1-1", "K-1-2", "K-1-3", 
+                                 "K-2", "S-1", "S-2"),
+                     logodds = rep(-6, 6),
+                     match = rep("match", 6)) 
+
+logit = function(x) log(x/(1-x))
+ 
+resultsdf$logodds <- resultsdf$classes/log(10)
+
+p <- ggplot(data = filter(resultsdf, !(train %in% c("2","3"))), aes(x = match, y = logodds, fill = train)) +
+  #geom_boxplot(aes(x = match, y = logodds, fill = set)) +
+  geom_boxplot(position = position_dodge(.6), width = .5) +
+  #facet_wrap(~train, nrow=2, labeller = labeller(train = newfacetlabels)) + 
+    geom_hline(yintercept = 0) + geom_text(aes(0,0,label = "p = 0.5", vjust = -1, hjust = -.1))+
+    geom_hline(yintercept = logit(.99)/log(10), linetype = 2, color = "grey") +
+    geom_text(aes(0,logit(.99)/log(10),label = "p = 0.99", vjust = -1, hjust = -.1)) +
+    geom_hline(yintercept = logit(.01)/log(10), linetype = 2, color = "grey") +
+    geom_text(aes(0,logit(.01)/log(10),label = "p = 0.01", vjust = -1, hjust = -.1)) +
+    geom_hline(yintercept = logit(.99999)/log(10), linetype = 2, color = "grey") +
+    geom_text(aes(0,logit(.99999)/log(10),label = "p = 0.99999", vjust = -1, hjust = -.1)) +
+    geom_hline(yintercept = logit(.00001)/log(10), linetype = 2, color = "grey") +
+    geom_text(aes(0,logit(.00001)/log(10),label = "p = 0.00001", vjust = -1, hjust = -.1)) +
+    ylab(expression(paste(Log[10]," odds of match"))) +
+    xlab(element_blank()) +
+    geom_text(data = labeldf[c(1,4:6),], mapping = aes(label = labels), angle = 90, position = position_dodge(.6), hjust=0)+
+#  ggtitle("Log-odds for models trained on each set of surfaces") +
+  #scale_fill_discrete(name="Training set", 
+  #                    labels = c("K-9-06 rep 1", "K-9-06 rep 2", "K-9-06 rep 3", 
+  #                               "K-9-9-01", "S-10-9-10-01", "S-10-09-02-01")) +
+    scale_fill_discrete(guide = FALSE)+
+    theme_classic() +
+    theme()+
+    NULL
+p
+
+logoddsname = paste0("NPNAS-log-odds-each-set-all-df-",df,".png")
+
+ggsave(logoddsname,p,height = 4, width = 4)
+#ggsave("NPNAS-log-odds-each-set.pdf",p,height = 4, width = 4)
+
+```
+
+
+
+# Different numbers of images
+
+The following chunks of code (no output in compiled document) compute the results for $k < 9$ using subsets of consecutive images. 
+```{r differentimagenumbers}
+# df = 5
+modellist = c("1","K-9-9-01","S-10-9-10-01","S-10-09-02-01") 
+
+resultsstore = data.frame(model = c("1","K-9-9-01","S-10-9-10-01","S-10-09-02-01"),
+                       fn2 = rep(0,4), fp2 = rep(0,4), fn3  = rep(0,4), fp3 = rep(0,4),
+                       fn4 = rep(0,4),fp4 = rep(0,4),fn5 = rep(0,4),fp5 = rep(0,4),
+                       fn6 = rep(0,4),fp6 = rep(0,4),fn7 = rep(0,4),fp7 = rep(0,4),
+                       fn8 = rep(0,4),fp8 = rep(0,4),fn9 = rep(0,4),fp9 = rep(0,4))
+
+storeresultsdf = data.frame(model = factor(levels = modellist ),
+                            k = numeric(0),
+                            classes = numeric(0),
+                            match = factor(levels = c("match","nonmatch")),
+                            df = numeric(0))
+
+keep.vars = c("knife","img","match","zfive","zten","repetition")
+
+###### looping starts here
+matching.fit.select = matching.fit
+unmatched.fit.select = unmatched.fit
+rowinput = 1
+#totalcorset <- totalcorset %>% subset((knife != "T10:T10"))
+for(k in 2:9){
+chooseset = data.frame(lengthen(9,k))
+chooseset$falsepos = 0
+chooseset$falseneg = 0
+for(i in seq(9-k+1)) {
+totalcorsetsub = totalcorset %>% subset(img %in% c(chooseset[i,1:k]))
+corset.shaped = reshape(totalcorsetsub[,keep.vars], idvar = c("knife","match","repetition"), timevar = "img", direction = "wide")
+dims = dim(corset.shaped)
+knifematrix3 = matrix(unlist(corset.shaped[,4:(3+2*k)]),ncol = 2*k)
+knifearray3 = array(t(knifematrix3),dim = c(2,k,dims[1]))
+
+V.newer =  matching.fit.select$var * matching.fit.select$V[unlist(c(chooseset[i, 1:k])),unlist(c(chooseset[i, 1:k])) ]
+unV.newer =  unmatched.fit.select$var * unmatched.fit.select$V[unlist(c(chooseset[i, 1:k])),unlist(c(chooseset[i, 1:k])) ]
+classes = dmatrixt(knifearray3,mean = matching.fit.select$mean[,1:k],
+                                  U = matching.fit.select$U, V = V.newer, log = TRUE, df = df) - 
+                  dmatrixt(knifearray3,mean = unmatched.fit.select$mean[,1:k],
+                                  U = unmatched.fit.select$U, V = unV.newer, log = TRUE, df = df)
+chooseset[i,"falseneg"] <- sum(classes[corset.shaped$match=="match"] < 0 )
+chooseset[i,"falsepos"] <- sum(classes[corset.shaped$match=="nonmatch"] > 0 )
+
+tmpresults = data.frame(model = factor(resultsstore$model[rowinput],levels = modellist), k, classes, match = factor(corset.shaped$match), df = df)
+storeresultsdf = rbind(storeresultsdf, tmpresults)
+}
+resultsstore[rowinput,2*(k-1)] = sum(chooseset$falseneg)
+resultsstore[rowinput,2*(k-1)+1] = sum(chooseset$falsepos)
+#cat("False positives. Max: ", max(chooseset$falsepos)," Total: ",sum(chooseset$falsepos))
+#cat("False negatives Max: ",max(chooseset$falseneg)," Total: ",sum(chooseset$falseneg))
+}
+
+
+
+
+
+###### looping starts here
+matching.fit.select = matching.fit.K9
+unmatched.fit.select = unmatched.fit.K9
+rowinput = 2
+for(k in 2:9){
+chooseset = data.frame(lengthen(9,k))
+chooseset$falsepos = 0
+chooseset$falseneg = 0
+for(i in seq(9-k+1)) {
+totalcorsetsub = totalcorset %>% subset(img %in% c(chooseset[i,1:k]))
+corset.shaped = reshape(totalcorsetsub[,keep.vars], idvar = c("knife","match","repetition"), timevar = "img", direction = "wide")
+dims = dim(corset.shaped)
+
+knifematrix3 = matrix(unlist(corset.shaped[,4:(3+2*k)]),ncol = 2*k)
+knifearray3 = array(t(knifematrix3),dim = c(2,k,dims[1]))
+
+V.newer =  matching.fit.select$var * matching.fit.select$V[unlist(c(chooseset[i, 1:k])),unlist(c(chooseset[i, 1:k])) ]
+unV.newer =  unmatched.fit.select$var * unmatched.fit.select$V[unlist(c(chooseset[i, 1:k])),unlist(c(chooseset[i, 1:k])) ]
+classes = dmatrixt(knifearray3,mean = matching.fit.select$mean[,1:k],
+                                  U = matching.fit.select$U, V = V.newer, log = TRUE, df = df) - 
+                  dmatrixt(knifearray3,mean = unmatched.fit.select$mean[,1:k],
+                                  U = unmatched.fit.select$U, V = unV.newer, log = TRUE, df = df)
+chooseset[i,"falseneg"] <- sum(classes[corset.shaped$match=="match"] < 0 )
+chooseset[i,"falsepos"] <- sum(classes[corset.shaped$match=="nonmatch"] > 0 )
+
+tmpresults = data.frame(model = factor(resultsstore$model[rowinput],levels = modellist), k, classes, match = factor(corset.shaped$match),df = df)
+storeresultsdf = rbind(storeresultsdf, tmpresults)
+}
+resultsstore[rowinput,2*(k-1)] = sum(chooseset$falseneg)
+resultsstore[rowinput,2*(k-1)+1] = sum(chooseset$falsepos)
+#cat("False positives. Max: ", max(chooseset$falsepos)," Total: ",sum(chooseset$falsepos))
+#cat("False negatives Max: ",max(chooseset$falseneg)," Total: ",sum(chooseset$falseneg))
+}
+
+
+###### looping starts here
+matching.fit.select = matching.fit.S10910
+unmatched.fit.select = unmatched.fit.S10910
+rowinput = 3
+for(k in 2:9){
+chooseset = data.frame(lengthen(9,k))
+chooseset$falsepos = 0
+chooseset$falseneg = 0
+for(i in seq(9-k+1)) {
+totalcorsetsub = totalcorset %>% subset(img %in% c(chooseset[i,1:k]))
+corset.shaped = reshape(totalcorsetsub[,keep.vars], idvar = c("knife","match","repetition"), timevar = "img", direction = "wide")
+dims = dim(corset.shaped)
+
+knifematrix3 = matrix(unlist(corset.shaped[,4:(3+2*k)]),ncol = 2*k)
+knifearray3 = array(t(knifematrix3),dim = c(2,k,dims[1]))
+
+V.newer =  matching.fit.select$var * matching.fit.select$V[unlist(c(chooseset[i, 1:k])),unlist(c(chooseset[i, 1:k])) ]
+unV.newer =  unmatched.fit.select$var * unmatched.fit.select$V[unlist(c(chooseset[i, 1:k])),unlist(c(chooseset[i, 1:k])) ]
+classes = dmatrixt(knifearray3,mean = matching.fit.select$mean[,1:k],
+                                  U = matching.fit.select$U, V = V.newer, log = TRUE, df = df) - 
+                  dmatrixt(knifearray3,mean = unmatched.fit.select$mean[,1:k],
+                                  U = unmatched.fit.select$U, V = unV.newer, log = TRUE, df = df)
+chooseset[i,"falseneg"] <- sum(classes[corset.shaped$match=="match"] < 0 )
+chooseset[i,"falsepos"] <- sum(classes[corset.shaped$match=="nonmatch"] > 0 )
+
+tmpresults = data.frame(model = factor(resultsstore$model[rowinput],levels = modellist), k, classes, match = factor(corset.shaped$match), df = df)
+storeresultsdf = rbind(storeresultsdf, tmpresults)
+}
+resultsstore[rowinput,2*(k-1)] = sum(chooseset$falseneg)
+resultsstore[rowinput,2*(k-1)+1] = sum(chooseset$falsepos)
+#cat("False positives. Max: ", max(chooseset$falsepos)," Total: ",sum(chooseset$falsepos))
+#cat("False negatives Max: ",max(chooseset$falseneg)," Total: ",sum(chooseset$falseneg))
+}
+
+
+###### looping starts here
+matching.fit.select = matching.fit.S1009
+unmatched.fit.select = unmatched.fit.S1009
+rowinput = 4
+for(k in 2:9){
+chooseset = data.frame(lengthen(9,k))
+chooseset$falsepos = 0
+chooseset$falseneg = 0
+for(i in seq(9-k+1)) {
+totalcorsetsub = totalcorset %>% subset(img %in% c(chooseset[i,1:k]))
+corset.shaped = reshape(totalcorsetsub[,keep.vars], idvar = c("knife","match","repetition"), timevar = "img", direction = "wide")
+dims = dim(corset.shaped)
+
+knifematrix3 = matrix(unlist(corset.shaped[,4:(3+2*k)]),ncol = 2*k)
+knifearray3 = array(t(knifematrix3),dim = c(2,k,dims[1]))
+
+V.newer =  matching.fit.select$var * matching.fit.select$V[unlist(c(chooseset[i, 1:k])),unlist(c(chooseset[i, 1:k])) ]
+unV.newer =  unmatched.fit.select$var * unmatched.fit.select$V[unlist(c(chooseset[i, 1:k])),unlist(c(chooseset[i, 1:k])) ]
+classes = dmatrixt(knifearray3,mean = matching.fit.select$mean[,1:k],
+                                  U = matching.fit.select$U, V = V.newer, log = TRUE, df = df) - 
+                  dmatrixt(knifearray3,mean = unmatched.fit.select$mean[,1:k],
+                                  U = unmatched.fit.select$U, V = unV.newer, log = TRUE, df = df)
+chooseset[i,"falseneg"] <- sum(classes[corset.shaped$match=="match"] < 0 )
+chooseset[i,"falsepos"] <- sum(classes[corset.shaped$match=="nonmatch"] > 0 )
+
+tmpresults = data.frame(model = factor(resultsstore$model[rowinput],levels = modellist), k, classes, match = factor(corset.shaped$match), df = df)
+storeresultsdf = rbind(storeresultsdf, tmpresults)
+}
+resultsstore[rowinput,2*(k-1)] = sum(chooseset$falseneg)
+resultsstore[rowinput,2*(k-1)+1] = sum(chooseset$falsepos)
+#cat("False positives. Max: ", max(chooseset$falsepos)," Total: ",sum(chooseset$falsepos))
+#cat("False negatives Max: ",max(chooseset$falseneg)," Total: ",sum(chooseset$falseneg))
+}
+
+
+
+storeresultsdf$logodds = storeresultsdf$classes/log(10)
+```
+
+# Plot Stored Results
+
+```{r plotofstoredresults, fig.cap = "The log-odds (base 10) for classifiers trained, using 9 images per surface, on each set of surfaces and tested on each set of surfaces using a subset of the images. The classifiers were tested using all possible subsets of a specified size.", dev = "png"}
+
+storeresultsdf$matching = storeresultsdf$match
+storeresultsdf$k = factor(storeresultsdf$k, levels = 0:9)
+ str(storeresultsdf)
+newplot <- ggplot(data = (filter(storeresultsdf, !(model %in% c("2","3")))),mapping = aes(x = k, y = logodds, fill = matching)) +
+    geom_boxplot(position = position_dodge(width = .3)) +
+    #scale_fill_discrete(drop = FALSE) +
+            #facet_grid( . ~ k,  ) +
+    theme_classic() +
+    theme(legend.position = c(0,1), legend.justification = c(0,1), legend.background = element_rect())+
+    geom_hline(yintercept = 0) + geom_text(aes(0,0,label = "p = 0.5", vjust = -.5, hjust = -.1))+
+    geom_hline(yintercept = logit(.99)/log(10), linetype = 2, color = "grey") +
+    geom_text(aes(0,logit(.99)/log(10),label = "p = 0.99", vjust = -.5, hjust = -.1)) +
+    geom_hline(yintercept = logit(.01)/log(10), linetype = 2, color = "grey") +
+    geom_text(aes(0,logit(.01)/log(10),label = "p = 0.01", vjust = -.5, hjust = -.1)) +
+    geom_hline(yintercept = logit(.99999)/log(10), linetype = 2, color = "grey") +
+    geom_text(aes(0,logit(.99999)/log(10),label = "p = 0.99999", vjust = -.5, hjust = -.1)) +
+    geom_hline(yintercept = logit(.00001)/log(10), linetype = 2, color = "grey") +
+    geom_text(aes(0,logit(.00001)/log(10),label = "p = 0.00001", vjust = -.5, hjust = -.1)) +
+    scale_x_discrete(limits = c("","","2","3","4","5","6","7","8","9"))+
+                # scale_fill_discrete(name = "Training set",
+            #                     labels = c("K-9-06 rep 1", "K-9-06 rep 2", "K-9-06 rep 3", "K-9-9-01", "S-10-9-10-01", "S-10-09-02-01"))  +
+            #ggtitle("Log-odds for different numbers of test set images") +
+            ylab(expression(paste(Log[10]," odds of match"))) + 
+            #xlab("Number of Images") +
+            xlab(element_blank()) +
+             scale_fill_discrete(name = element_blank(), drop = FALSE) + 
+            #facet_wrap(~k, nrow = 2) +
+            #theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+            NULL
+ newplot
+#ggsave('NPNAS-numbers-per-image.png', newplot, height = 4, width = 4)
+#
+#
+#NPNASnumbersplot = paste0('N-NPNAS-numbers-per-image-all-df-',df,'.png')
+#ggsave(NPNASnumbersplot, newplot, height = 4, width = 5)
+
+#ggsave('N-NPNAS-numbers-per-image.png', newplot, height = 4, width = 5)
+#ggsave('N-NPNAS-allsubsets.pdf', newplot, height = 4, width = 5)
+```
+
+
+
+# Print Error Rate
+
+For each of the four models and each setting of $k$, this outputs the false postives and false negatives.
+
+```{r newerrorrate, asis=TRUE}
+
+knitr::kable(storeresultsdf %>% mutate(decision = (classes > 0)) %>% group_by(k, match,model) %>%
+    summarize(total = n(), pos = sum(decision), neg = sum(1-decision), prate = pos/total, negrate = neg/total))
+
+
+
+```
+
+
+
+```{r summarizestoredresults, asis=TRUE, comment = "", message = FALSE}
+numcompare = 336 # 56*6, positive comparisons
+numnegcompare =  2*6*(4*choose(9,2) + 2*choose(10,2)) # 2 (each way) * 6 compare
+#numcompare = 38*4 # 56*6, positive comparisons
+#numnegcompare =  2*4*(2*choose(9,2) + 2*choose(10,2)) # 2 (each way) * 2 compare
+
+str(storeresultsdf)
+sumresults = colSums(resultsstore[,2:17]) / rep(c(numcompare,numnegcompare), 8)
+meanresult <- rep(choose(9,2:9), each = 2) 
+sumresults <- sumresults/meanresult
+
+
+errorrate <- tidyr::gather(resultsstore,type, errors, 2:17) %>% group_by(type) %>% summarise(totalerrors = sum(errors))
+errorrate$rate <- errorrate$totalerrors / (rep(c(numcompare,numnegcompare), each = 8) * rep(choose(9,2:9), 2))
+errorrate$type <- c(rep("FN",8),rep("FP",8))
+errorrate$images <- rep(2:9,2)
+
+#knitr::kable(errorrate)
+errorrate
+```
+
+## next
+
+errortable
+
+```{r errortable, asis = TRUE}
+errortable <- errorrate %>% 
+  select(type, rate, images) %>% 
+  tidyr::spread(key = type, value = rate)
+
+#knitr::kable(errortable)
+errortable
+
+maxlogoddsnonmatch <- storeresultsdf %>% 
+  subset(match == "nonmatch") %>% 
+  group_by(model, k) %>%
+  summarize(max = max(logodds))
+minlogoddsmatch <- storeresultsdf %>% 
+  subset(match == "match") %>% 
+  group_by(model, k) %>%
+  summarize(min = min(logodds))
+
+plotdiffs <- inner_join(maxlogoddsnonmatch,minlogoddsmatch)
+```
+
+# Log odds of worst cases
+
+```{r diffplot}
+diffplot <- ggplot(plotdiffs) +
+  geom_point(aes(x = k, y = min, color = model)) +
+  # geom_point(aes(x = k, y = min, color = model)) + 
+  # y_lab("log-odds") + 
+  theme_bw()+
+  ggtitle("Worst-case log-odds for true matches")+
+  xlab("Number of images")+
+  ylab("log-odds (base 10) in the worst case") +
+  NULL
+(diffplot)
+#str(storeresultsdf)
+
+strong = storeresultsdf %>% group_by(match, k) %>% mutate(strongpos = (logodds > 6), strongneg = (logodds < -6)) %>% summarize(SPrate = mean(strongpos), SNrate = mean(strongneg))
+strong
+
+```
+
+
+# Strong negative and strong positive plots
+
+These are diagnostic plots of the proportions of results with log odds (base 10) of magnitude greater than 6.
+
+```{r strongnegativerates, fig.cap = "The extremely strong negative rate (log-odds of being a match less than -6) among true non-matches increases monotonically with the number of images."}
+
+ggplot()+
+  geom_point(data = filter(strong, match == "nonmatch"), aes(x = k, y = SNrate)) +
+               theme_bw() +
+    xlab("Number of images") + ylab("Proportion classified as extremely strong negative") +
+#    ylim(c(.25,1)) +
+  NULL
+
+```
+
+
+```{r strongpositiverates, fig.cap = "The extremely strong positive rate (log-odds of being a match greater than 6) among true matches increases monotonically with the number of images."}
+
+ggplot()+
+  geom_point(data = filter(strong, match == "match"), aes(x = k, y = SPrate)) +
+               theme_bw() +
+    xlab("Number of images") + ylab("Proportion classified as extremely strong positive") +
+#  ylim(c(.9,1)) +
+  NULL
+
+```
+
+# Final diagnostic plot
+
+This visualizes the log odds for all four trained models and all settings of $k$. It also saves a 
+`.csv` file of the log odds.
+
+```{r copyplot}
+
+str(storeresultsdf)
+postlogplot <- ggplot(data = storeresultsdf, aes(x = match, y = classes/log(10), fill =  model)) +
+  labs(x = NULL, 
+       y = "log-odds (base 10)") +
+    theme_bw() +
+    theme(title = element_text(size = 9), legend.position="bottom", legend.text = element_text(size=7),
+          legend.title = element_text(size = 8), axis.text =  element_text(size=7), axis.title = element_text(size=8),
+          axis.text.y = element_text( angle = 90, hjust = .5),
+          strip.text = element_text(size = 7), plot.margin=grid::unit(c(0,0,0,0), "mm"),
+          strip.background = element_rect(fill = "slategray2"))+
+    geom_boxplot() +
+    scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9", "#009E73"), name = NULL)+
+    geom_hline(yintercept = 0) +
+    facet_wrap(~k) +
+    NULL
+postlogplot
+
+  
+  
+finalresultsdf = storeresultsdf %>% mutate(df = df)
+
+resultsdfname = paste0('Nfinal-log-odds-all-df-',df,'.csv')
+write.csv(storeresultsdf, file = resultsdfname)
+```
+

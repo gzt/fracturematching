@@ -1,0 +1,790 @@
+---
+title: "Figures for Matrix Variate Classification"
+author: "Geoffrey Thompson et al"
+date: "May 2021"
+output: 
+  pdf_document:
+    keep_tex: true
+    fig_crop: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE, warning = FALSE, message = FALSE)
+```
+
+## Read Knife Data
+
+```{r cars}
+library('scales')
+library('ggplot2')
+library('lme4')
+library('psych')
+library('reshape2')
+library('MASS')
+devtools::load_all('./MixMatrix_0.1.0/')
+library('CholWishart')
+library('dplyr')
+library('tidyr')
+
+
+
+cor.set1 = read.csv(file =   "data/Correlationsset1.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set2 = read.csv(file =   "data/Correlationsset2.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set3 = read.csv(file =   "data/Correlationsset3.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set4 = read.csv(file =   "data/Correlations S-10-9-02-truncated.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set5 = read.csv(file =   "data/Correlations K-9-9-truncated.csv", check.names = FALSE, header = TRUE)[,-1]
+cor.set6 = read.csv(file =   "data/Correlations S-10-9-10-truncated.csv", check.names = FALSE, header = TRUE)[,-1]
+                  
+### sets 2 and 3 are the replicates, so left out of this analysis.
+totalcorset = rbind(cor.set1,cor.set5, cor.set4, cor.set6)
+
+totalcorset$zfive = fisherz(totalcorset$`5-10`)
+totalcorset$zten = fisherz(totalcorset$`10-20`)
+totalcorset$repetition = factor(totalcorset$set)
+totalcorset$img = factor(totalcorset$img)
+matchset = totalcorset[totalcorset$match == "match",]
+matchset = droplevels(matchset)
+```
+
+There are two types of data contained in this supplement. The first are the inputs: the correlations in various frequency bands between the imaged knife bases and tips. The second are model outputs: after a model is trained on one set of knives, the outputted log-odds of being a match are computed for each base-tip pair comparison in all of the sets. Other R scripts do those calculations, this workbook creates figures and does some computations.
+
+```{r histplot, fig.width = 6, fig.height = 2.5}
+### this is a manually resphaped version of replicate 2. 
+### there isn't a particular reason why the second replicate was chosen
+### The other ones look similar.
+longfreq <- read.csv("data/corr-k-9-9-rep-2-long.csv")
+
+longfreq$band = factor(longfreq$band, levels = c("5-10", "10-20", "20-30", "30-40", "40-50"))
+
+histplot <- ggplot(longfreq, aes(x = correlation, fill = match)) + 
+  geom_histogram(alpha = 0.8, position = "identity", bins = 30) +
+  facet_wrap(~band, nrow = 1)+
+  theme_bw()+
+  xlab("Cross-correlations")+
+  ylab("Count")+
+  labs(fill = "Match")+
+  scale_fill_manual(values=c("#D94801", "#238B45"), labels = c("match", "non-match"))+
+  theme(legend.position = "bottom", legend.title = element_blank())+
+  NULL
+histplot
+
+```
+
+
+## Read LogOdds Data
+
+This data is for the "consecutive" image analysis - taking all subsets with a specified overlap. 
+
+This trains on all nine images (with 75% overlap, labeled from 1 to 9) and tests on, eg for subsets of size 3, 123, 234, 345, 456, 567, 678, and 789. This also trains on 5 images (1, 3, 5, 7, 9) for 50% overlap and 3 images (1, 5, and 9) for 0% and does a similar analysis. 
+
+
+```{r odds, echo=FALSE}
+finalfiles = list.files(pattern="final", path = "./oddsconsec/", full.names = TRUE)
+#finalfiles
+
+files159 = list.files(pattern="-0-df", path = "./oddsconsec/", full.names = TRUE)
+
+odds159 = do.call("rbind",lapply(files159,FUN=function(files){read.table(files,header=TRUE, sep=",")})) %>% mutate(sets = "159")
+
+
+files13579 = list.files(pattern="50-df", path = "./oddsconsec/", full.names = TRUE)
+
+odds13579 = do.call("rbind",lapply(files13579,FUN=function(files){read.table(files,header=TRUE, sep=",")})) %>% mutate(sets = "13579")
+
+filesall = list.files(pattern="all-df", path = "./oddsconsec/", full.names = TRUE)
+
+oddsall = do.call("rbind",lapply(filesall,FUN=function(files){read.table(files,header=TRUE, sep=",")})) %>% mutate(sets = "all")
+
+finalodds = rbind(odds159, odds13579,oddsall)
+# removing because these are big.
+rm(odds13579)
+rm(odds159)
+rm(oddsall)
+
+```
+
+This is a summary of log odds of being a match for models trained on 9 images and tested on 3 images for various degrees of freedom (mostly a diagnostic plot, it is not in the paper).
+
+```{r demoplot, eval = TRUE}
+newfacetlabels = c("K-1-1" = "K-9-06 rep 1", "K-1-2" = "K-9-06 rep 2", "K-1-3" = "K-9-06 rep 3", "K-2" = "K-9-9-01", "S-1" = "S-10-9-10-01", "S-10-09-02-01" = "S-2")
+
+
+
+postlogplot <- ggplot(data = filter(finalodds, k == 3), aes(x = match, y = classes/log(10))) +
+  labs(title = "Posterior log odds ratio for each surface", x = "", 
+       y = expression(paste(Log[10]," odds of match"))) +
+  geom_boxplot() + 
+  geom_hline(yintercept = 0) +
+  facet_grid(df~sets, labeller = labeller(model = newfacetlabels), scales = "free_y") +
+  theme_bw() +
+  NULL
+
+postlogplot
+
+
+
+```
+
+## Tables of results
+
+```{r tables, results = "as-is", fig.height=3, fig.width=3.5}
+finalodds <- finalodds %>% mutate(
+  TN = case_when(
+    (matching == "nonmatch") & (classes < 0) ~ 1,
+    TRUE ~ 0),
+  FP = case_when(
+    (matching == "nonmatch") & (classes > 0) ~ 1,
+    TRUE ~ 0),
+  FN = case_when(
+    (matching == "match") & (classes < 0) ~ 1,
+    TRUE ~ 0)
+) %>% mutate(
+  TP = case_when(
+    (match == "match") & (classes > 0) ~ 1,
+    TRUE ~ 0))
+
+finalodds$factordf = ordered(finalodds$df, levels = c("3", "5", "10", "15", "20", "30"))
+
+
+finalodds %>% group_by(factordf, k) %>% filter(sets == "all") %>% 
+  dplyr::summarize(CountFP = sum(FP), CountFN = sum(FN), CountTP = sum(TP), CountTN = sum(TN)) %>%
+  mutate(CountP = CountFN + CountTP, CountN = CountFP + CountTN) -> allsummary
+
+finalodds %>% group_by(factordf, k) %>% filter(sets == "13579") %>% 
+  dplyr::summarize(CountFP = sum(FP), CountFN = sum(FN), CountTP = sum(TP), CountTN = sum(TN)) %>%
+  mutate(CountP = CountFN + CountTP, CountN = CountFP + CountTN) -> fiftysummary
+
+finalodds %>% group_by(factordf, k) %>% filter(sets == "159") %>%
+  dplyr::summarize(CountFP = sum(FP), CountFN = sum(FN), CountTP = sum(TP), CountTN = sum(TN)) %>%
+  mutate(CountP = CountFN + CountTP, CountN = CountFP + CountTN) -> zerosummary
+
+knitr::kable(allsummary)
+
+knitr::kable(fiftysummary)
+
+knitr::kable(zerosummary)
+
+ggplot(data = allsummary, aes(x = factor(k), y = 100*CountFP/CountN, fill = factordf, color = factordf)) + 
+  geom_bar(stat = 'identity', width=.5, position = "dodge") + 
+  xlab("Number of images") + 
+  ylab("False positive rate (%)")+
+      labs(fill = "Degrees of \nfreedom", color = "Degrees of \nfreedom")+
+    theme_bw() +
+    theme(legend.position = "bottom")+
+  scale_fill_brewer(palette = "Dark2")+
+  scale_color_brewer(palette = "Dark2")+
+  NULL
+
+ggplot(data = allsummary, aes(x = factor(k), y = 100*CountFN/CountP, fill = factordf, color = factordf)) + 
+  geom_bar(stat = 'identity', width=.5, position = "dodge") + 
+  xlab("Number of images") + 
+  ylab("False negative rate (%)")+
+      labs(fill = "Degrees of \nfreedom", color = "Degrees of \nfreedom")+
+    theme_bw() +
+      theme(legend.position = "bottom")+
+    scale_fill_brewer(palette = "Dark2")+
+  scale_color_brewer(palette = "Dark2")+
+  NULL
+
+ggplot(data = fiftysummary, aes(x = factor(k), y = 100*CountFP/CountN, fill = factordf, color = factordf)) + 
+  geom_bar(stat = 'identity', width=.5, position = "dodge") + 
+  xlab("Number of images") + 
+  ylab("False positive rate (%)")+
+      labs(fill = "Degrees of \nfreedom", color = "Degrees of \nfreedom")+
+    theme_bw() +
+      theme(legend.position = "bottom")+
+    scale_fill_brewer(palette = "Dark2")+
+  scale_color_brewer(palette = "Dark2")+
+  ggtitle("50% overlap")+
+  NULL
+
+ggplot(data = fiftysummary, aes(x = factor(k), y = 100*CountFN/CountP, fill = factordf, color = factordf)) + 
+  geom_bar(stat = 'identity', width=.5, position = "dodge") + 
+  xlab("Number of images") + 
+  ylab("False negative rate (%)")+
+      labs(fill = "Degrees of \nfreedom", color = "Degrees of \nfreedom")+
+    theme_bw() +
+        theme(legend.position = "bottom")+
+    scale_fill_brewer(palette = "Dark2")+
+  scale_color_brewer(palette = "Dark2")+
+  NULL
+
+ggplot(data = zerosummary, aes(x = factor(k), y = 100*CountFP/CountN, fill = factordf, color = factordf)) + 
+  geom_bar(stat = 'identity', width=.5, position = "dodge") + 
+  xlab("Number of images") + 
+  ylab("False positive rate (%)")+
+      labs(fill = "Degrees of \nfreedom", color = "Degrees of \nfreedom")+
+    theme_bw() +
+        theme(legend.position = "bottom")+
+    scale_fill_brewer(palette = "Dark2")+
+  scale_color_brewer(palette = "Dark2")+
+  NULL
+
+ggplot(data = zerosummary, aes(x = factor(k), y = 100*CountFN/CountP, fill = factordf, color = factordf)) + 
+  geom_bar(stat = 'identity', width=.5, position = "dodge") + 
+  xlab("Number of images") + 
+  ylab("False negative rate (%)")+
+      labs(fill = "Degrees of \nfreedom", color = "Degrees of \nfreedom")+
+    theme_bw() +
+       theme(legend.position = "bottom")+
+    scale_fill_brewer(palette = "Dark2")+
+  scale_color_brewer(palette = "Dark2")+
+  NULL
+
+
+```
+
+```{r moresets, fig.height=4, fig.width=5.5}
+
+ggplot(data = allsummary, aes(x = factor(k), fill = factordf, color = factordf)) + 
+  geom_hline(yintercept = 0, color = "gray")+
+  geom_bar(aes(y = -100*CountFP/CountN), stat = 'identity', width=.5, position = "dodge") +
+  annotate( "text", x=6, y=-0.25, label="False Negative Rate", hjust=0) +
+  geom_bar(aes(y = 100*CountFN/CountP), stat = 'identity', width=.5, position = "dodge") + 
+  annotate("text", x=6, y=0.35, label="False Positive Rate", hjust=0) +
+  xlab("Number of images") + 
+  ylab("Rate (%)")+
+  labs(fill = "DF", color = "DF", )+
+  theme_bw() +
+  theme(legend.position = c(0.8, 0.55), legend.direction="horizontal",
+        legend.background = element_rect(fill = "white", color = "black"))+
+  scale_fill_brewer(palette = "Dark2")+
+  scale_color_brewer(palette = "Dark2")+
+  NULL
+ggsave("fp-fn-combined.pdf", height= 4, width = 5.5)
+
+```
+
+
+```{r moresetstwo, fig.height=2.5, fig.width=5.5}
+
+
+fiftysummary_tmp <- fiftysummary %>% mutate(set = "50% overlap")
+zerosummary_tmp <- zerosummary %>% mutate(set = "0% overlap")
+
+fiftyzero = rbind(fiftysummary_tmp, zerosummary_tmp)
+
+
+ggplot(data = fiftyzero, aes(x = factor(k), y = 100*CountFP/CountN, fill = factordf, color = factordf)) + 
+  geom_bar(stat = 'identity', width=.5, position = "dodge") + 
+  xlab("Number of images") + 
+  ylab("False positive rate (%)")+
+  facet_grid(rows = ~set, scales = "free_x", space = "free_x")+
+  labs(fill = "DF", color = "DF")+
+  theme_bw() +
+  theme(legend.position = c(0.8, 0.75), legend.direction="horizontal",
+        legend.background = element_rect(fill = "white", color = "black"))+
+  scale_fill_brewer(palette = "Dark2")+
+  scale_color_brewer(palette = "Dark2")+
+  NULL
+ggsave("fifty-zero-overlap.pdf", height = 4, width = 5.5)
+
+```
+
+
+```{r subsetsoverlap}
+
+nooverlap <- ggplot(data = (filter(finalodds, k == 3, sets == "159") ), aes(x = match, y = classes/log(10))) +
+  labs(title = "Posterior log odds ratio for 50% overlap", x = "", 
+       y = expression(paste(Log[10]," odds of match"))) +
+  geom_boxplot() + 
+  geom_hline(yintercept = 0) +
+  facet_wrap(~factordf,  scales = "free_y") +
+      theme(title = element_text(size = 9), legend.position="bottom", legend.text = element_text(size=7),
+          legend.title = element_text(size = 8), axis.text =  element_text(size=7), axis.title = element_text(size=8),
+          axis.text.y = element_text( angle = 90, hjust = .5),
+          strip.text = element_text(size = 7), plot.margin=grid::unit(c(0,0,0,0), "mm"),
+          strip.background = element_rect(fill = "slategray2"))+
+   theme_bw() +
+  NULL
+
+
+
+fiftyoverlap <- ggplot(data = (filter(finalodds, k == 5, sets == "13579") ), aes(x = match, y = classes/log(10))) +
+  labs(title = "Posterior log odds ratio for 50% overlap", x = "", 
+       y = expression(paste(Log[10]," odds of match"))) +
+  geom_boxplot() + 
+  geom_hline(yintercept = 0) +
+  facet_wrap(~factordf,  scales = "free_y") +
+      theme(title = element_text(size = 9), legend.position="bottom", legend.text = element_text(size=7),
+          legend.title = element_text(size = 8), axis.text =  element_text(size=7), axis.title = element_text(size=8),
+          axis.text.y = element_text( angle = 90, hjust = .5),
+          strip.text = element_text(size = 7), plot.margin=grid::unit(c(0,0,0,0), "mm"),
+          strip.background = element_rect(fill = "slategray2"))+
+  theme_bw() +
+  NULL
+
+fiftyoverlap
+
+
+
+seventyfive <- ggplot(data = (filter(finalodds, k == 3, sets == "all") ), aes(x = match, y = classes/log(10))) +
+  labs(title = "Posterior log odds ratio for 75% overlap", x = "", 
+       y = expression(paste(Log[10]," odds of match"))) +
+  geom_boxplot() + 
+  geom_hline(yintercept = 0) +
+  facet_wrap(~factordf,  scales = "free_y") +
+      theme(title = element_text(size = 9), legend.position="bottom", legend.text = element_text(size=7),
+          legend.title = element_text(size = 8), axis.text =  element_text(size=7), axis.title = element_text(size=8),
+          axis.text.y = element_text( angle = 90, hjust = .5),
+          strip.text = element_text(size = 7), plot.margin=grid::unit(c(0,0,0,0), "mm"),
+          strip.background = element_rect(fill = "slategray2"))+
+  theme_bw() +
+  NULL
+
+seventyfive
+
+
+
+
+```
+
+
+Plots for df = 10.
+
+```{r finalplot, dev = "pdf", fig.width = 5, eval = TRUE}
+
+ggplot(data = (filter(finalodds, !(model %in% c("2","3")), sets == "all", df == 10)),mapping = aes(x = factor(k), y = logodds, fill = matching)) +
+    geom_boxplot(position = position_dodge(width = .3)) +
+    theme_bw(base_size = 13) +
+  xlab("Number of images")+
+    theme(legend.position = c(0.01,.99), legend.justification = c(0,1), legend.background = element_rect(), panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+    geom_hline(yintercept = 0) + 
+    annotate("text", x=.6,y=0.65,label = "p = 0.5", hjust=0)+
+    geom_hline(yintercept = logit(.99)/log(10), linetype = 2, color = "grey") +
+        annotate("text", x=.6,y=(.65+logit(.99)/log(10)),label = "p = 0.99", hjust=0)+
+    geom_hline(yintercept = logit(.01)/log(10), linetype = 2, color = "grey") +
+     annotate("text", x=.6,y=0.65+logit(.01)/log(10),label = "p = 0.01", hjust=0)+
+     geom_hline(yintercept = logit(.99999)/log(10), linetype = 2, color = "grey") +
+     annotate("text", x=.6,y=0.65+logit(.99999)/log(10),label = "p = 0.99999", hjust=0)+
+     geom_hline(yintercept = logit(.00001)/log(10), linetype = 2, color = "grey") +
+     annotate("text", x=.6,y=0.65+logit(.00001)/log(10),label = "p = 0.00001", hjust=0)+
+    scale_x_discrete(limits = c("","","2","3","4","5","6","7","8","9"))+
+            ylab(expression(paste(Log[10]," odds of match"))) + 
+            xlab(element_blank()) +
+             scale_fill_discrete(name = element_blank(), drop = FALSE, labels = c("match", "non-match")) + 
+            NULL
+ggsave("Nature-by-image-number.pdf", width = 5, height = 4)
+
+ggplot(data = (filter(finalodds, !(model %in% c("2","3")), sets == "13579", df == 10)),mapping = aes(x = factor(k), y = logodds, fill = matching)) +
+    geom_boxplot(position = position_dodge(width = .3)) +
+    theme_bw(base_size = 13) +
+  xlab("Number of images")+
+    theme(legend.position = c(0.01,.99), legend.justification = c(0,1), legend.background = element_rect(), panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+    geom_hline(yintercept = 0) + 
+    annotate("text", x=.6,y=0.65,label = "p = 0.5", hjust=0)+
+    geom_hline(yintercept = logit(.99)/log(10), linetype = 2, color = "grey") +
+        annotate("text", x=.6,y=(.65+logit(.99)/log(10)),label = "p = 0.99", hjust=0)+
+    geom_hline(yintercept = logit(.01)/log(10), linetype = 2, color = "grey") +
+     annotate("text", x=.6,y=0.65+logit(.01)/log(10),label = "p = 0.01", hjust=0)+
+     geom_hline(yintercept = logit(.99999)/log(10), linetype = 2, color = "grey") +
+#    geom_text(aes(0,logit(.99999)/log(10),label = "p = 0.99999", vjust = -.5, hjust = -.1)) +
+     annotate("text", x=.6,y=0.65+logit(.99999)/log(10),label = "p = 0.99999", hjust=0)+
+     geom_hline(yintercept = logit(.00001)/log(10), linetype = 2, color = "grey") +
+     annotate("text", x=.6,y=0.65+logit(.00001)/log(10),label = "p = 0.00001", hjust=0)+
+    scale_x_discrete(limits = c("","","2","3","4","5"))+
+            ylab(expression(paste(Log[10]," odds of match"))) + 
+            xlab(element_blank()) +
+             scale_fill_discrete(name = element_blank(), drop = FALSE, labels = c("match", "non-match")) + 
+            NULL
+
+
+
+ggplot(data = (filter(finalodds, !(model %in% c("2","3")), sets == "159", df == 10)),mapping = aes(x = factor(k), y = logodds, fill = matching)) +
+    geom_boxplot(position = position_dodge(width = .3)) +
+    theme_bw(base_size = 13) +
+  xlab("Number of images")+
+    theme(legend.position = c(0.01,.99), legend.justification = c(0,1), legend.background = element_rect(), panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+    geom_hline(yintercept = 0) + 
+    annotate("text", x=.6,y=0.65,label = "p = 0.5", hjust=0)+
+    geom_hline(yintercept = logit(.99)/log(10), linetype = 2, color = "grey") +
+        annotate("text", x=.6,y=(.65+logit(.99)/log(10)),label = "p = 0.99", hjust=0)+
+    geom_hline(yintercept = logit(.01)/log(10), linetype = 2, color = "grey") +
+     annotate("text", x=.6,y=0.65+logit(.01)/log(10),label = "p = 0.01", hjust=0)+
+     geom_hline(yintercept = logit(.99999)/log(10), linetype = 2, color = "grey") +
+     annotate("text", x=.6,y=0.65+logit(.99999)/log(10),label = "p = 0.99999", hjust=0)+
+     geom_hline(yintercept = logit(.00001)/log(10), linetype = 2, color = "grey") +
+     annotate("text", x=.6,y=0.65+logit(.00001)/log(10),label = "p = 0.00001", hjust=0)+
+    scale_x_discrete(limits = c("","","2","3"))+
+            ylab(expression(paste(Log[10]," odds of match"))) + 
+            xlab(element_blank()) +
+             scale_fill_discrete(name = element_blank(), drop = FALSE, labels = c("match", "non-match")) + 
+            NULL
+
+```
+
+
+
+```{r bysurface, fig.width =6, fig.height = 6}
+
+
+dftextlabel = data.frame(untransformed = c(.99, .99999, .01, .00001), images = "9 images", 
+                         stuff = c("p = 0.99", "p = 0.99999", "p = 0.01", "p = 0.00001"),
+                         DF = ordered(rep("30",4), levels = c("3","5","10","15","20","30"))
+                           , match = c("nonmatch", "nonmatch", "match", "match"),
+                         model = factor(c("1",      "K-9-9-01",
+                                        "S-10-09-02-01",  "S-10-9-10-01"),
+                                        levels = c("1",      "K-9-9-01",
+                                        "S-10-09-02-01",  "S-10-9-10-01"),
+                                        labels = c("K-1-1", "K-2", "S-1", "S-2")))
+
+df_fix_height = data.frame(logodds = c(16,16,16,28,28,28), images = "9 images",
+                           DF = c("3","5","10","15","20","30"), model =  "K-9-9-01")
+
+dftextlabel = dftextlabel %>% mutate(logodds = logit(untransformed)/log(10)+.65)
+
+dflabs = c("DF = 3", "DF = 5", "DF = 10", "DF = 15", "DF = 20", "DF = 30")
+finalodds$logodds = finalodds$classes/log(10)
+
+names(dflabs) = c("3", "5", "10", "15", "20", "30")
+finalodds$DF = finalodds$factordf
+ggplot(data = filter(finalodds, k == 9), aes(x = match, y = logodds, 
+                                                         fill = factor(model, labels = c("K-1-1", "K-2", "S-1", "S-2")))) +
+  labs(title = "", x = "", 
+       y = expression(paste(Log[10]," odds of match"))) +
+  geom_boxplot() + 
+  geom_hline(yintercept = 0) +
+ facet_wrap(~DF, labeller = label_both ) +
+  theme_bw() +
+ scale_fill_discrete(name="Training Set")+
+  scale_x_discrete(labels = c("match", "non-match"))+
+  theme(legend.position = "bottom", legend.spacing.y = unit(2,"cm")) +
+
+       geom_hline(yintercept = logit(.99)/log(10), linetype = 2, color = "grey") +
+    geom_hline(yintercept = logit(.01)/log(10), linetype = 2, color = "grey") +
+     geom_hline(yintercept = logit(.99999)/log(10), linetype = 2, color = "grey") +
+     geom_hline(yintercept = logit(.00001)/log(10), linetype = 2, color = "grey") +
+       geom_text(data = dftextlabel, mapping = aes(x = match, y = logodds, label = stuff), size = 2.5)+
+  NULL
+ggsave("Nature-bysurface.pdf", height = 5, width = 6)
+
+```
+
+## Log Odds of extreme value boundary
+
+
+```{r pivot, echo = TRUE}
+bounddata <- finalodds %>% filter(k ==9, factordf == "10", 
+                                  model == "S-10-09-02-01", match == "nonmatch" )
+
+ xbar = mean(bounddata$classes)
+ se = sd(bounddata$classes)
+ n = 324
+ delta = -(sqrt(n-1)) * qnorm(.9999)
+res = xbar - qt(0.05, n-1,delta) * se / sqrt(n)
+res
+
+cat("probability:")
+
+1/(1+exp(-res))
+```
+
+
+## Cross Validation Information
+
+
+```{r combinedcvdata, fig.width=5.5, fig.height=4}
+ninecvdf = read.csv('data/nine-image-CV-results.csv')
+ninecvdf$images = "9 images"
+
+threecvdf = read.csv('data/three-image-CV-results.csv')
+threecvdf$images = "3 images"
+
+fivecvdf = read.csv('data/five-image-CV-results.csv')
+fivecvdf$images = "5 images"
+
+combcvdf = rbind(ninecvdf, fivecvdf, threecvdf)
+
+library(ggplot2)
+invlogit = function(x) 1/(1+exp(-x))
+
+textlabeldf = data.frame(untransformed = c(.99, .99999, .01, .00001), images = "9 images", 
+                         label = c("p = 0.99", "p = 0.99999", "p = 0.01", "p = 0.00001"),
+                         df = 3, matching = "match")
+
+textlabeldf = textlabeldf %>% mutate(logodds = logit(untransformed)/log(10))
+
+
+qplot(matching, logodds, fill = factor(df), data = combcvdf, geom = "boxplot", facets = ~images)+
+  theme_bw()+
+  xlab(NULL)+
+  ylab(expression(paste(Log[10]," odds of match"))) +
+  labs(fill = "DF")+
+  geom_hline(yintercept=0)+
+   theme(legend.position = "bottom") +
+    guides(fill = guide_legend(nrow=1, ncol = 6))+
+  scale_fill_brewer(palette = "Dark2")+
+  scale_x_discrete(labels = c("match", "non-match"))+
+     geom_hline(yintercept = logit(.99)/log(10), linetype = 2, color = "grey") +
+    geom_hline(yintercept = logit(.01)/log(10), linetype = 2, color = "grey") +
+     geom_hline(yintercept = logit(.99999)/log(10), linetype = 2, color = "grey") +
+     geom_hline(yintercept = logit(.00001)/log(10), linetype = 2, color = "grey") +
+   geom_text(data = textlabeldf, mapping = aes(x = matching, y = logodds, label = label), size = 3)+
+  NULL
+
+ggsave("combined-image-CV.pdf", width = 5.5, height = 4)
+
+```
+
+
+
+
+
+```{r Nature-repeatability, fig.height = 4, fig.width = 4}
+
+newcorset = rbind(cor.set1,cor.set2,cor.set3)
+newcorset$zfive = fisherz(newcorset$`5-10`)
+newcorset$zten = fisherz(newcorset$`10-20`)
+
+newcorset$repetition = factor(newcorset$set)
+newcorset$img = factor(newcorset$img)
+matchset = newcorset[newcorset$match == "match",]
+matchset = droplevels(matchset)
+fisher_trans = function() trans_new("fisher", function(x) psych::fisherz(x), 
+                                    function(x) psych::fisherz2r(x))
+
+#str(newcorset)
+
+library(ellipse)
+
+pickpoints <- newcorset$match == 'match'
+
+
+
+
+newcorset$x = newcorset$`5-10`
+newcorset$y = newcorset$`10-20`
+
+newcorset$set = factor(newcorset$set, levels = c("1", "2", "3"),
+                       labels = c("K-1-1", "K-1-2", "K-1-3"))
+
+newmeans <- newcorset %>% filter(match == 'match') %>% group_by(set) %>% summarize(x = mean(x), y = mean(y)) 
+library(ellipse)
+peacocksubset =  newcorset[pickpoints,c("x","y","repetition")] # this is a bad way of doing it
+
+rot.one = subset(peacocksubset, repetition == "1")[,c("x","y")]
+rot.two = subset(peacocksubset, repetition == "2")[,c("x","y")]
+rot.three = subset(peacocksubset, repetition == "3")[,c("x","y")]
+
+centers = c(mean(atanh(rot.one$x)),mean(atanh(rot.one$y)))
+cov = cov(atanh(rot.one[,c('x','y')]))
+ellipsepoints = data.frame(tanh(ellipse(centre =centers, cov,level = .99, npoints = 300)))
+ellipsepoints$set = "K-1-1"
+
+centers = c(mean(atanh(rot.two$x)),mean(atanh(rot.two$y)))
+cov = cov(atanh(rot.three[,c('x','y')]))
+ellipsepointstwo = data.frame(tanh(ellipse(centre =centers, cov,level = .99, npoints = 300)))
+ellipsepointstwo$set = "K-1-2"
+
+ellipsepoints = rbind(ellipsepoints, ellipsepointstwo)
+
+
+centers = c(mean(atanh(rot.three$x)),mean(atanh(rot.three$y)))
+cov = cov(atanh(rot.three[,c('x','y')]))
+ellipsepointstwo = data.frame(tanh(ellipse(centre =centers, cov,level = .99, npoints = 300)))
+ellipsepointstwo$set = "K-1-3"
+
+ellipsepoints = rbind(ellipsepoints, ellipsepointstwo)
+
+ellipsepoints$set = factor(ellipsepoints$set, levels = c("K-1-1", "K-1-2", "K-1-3"),
+                       labels = c("K-1-1", "K-1-2", "K-1-3"))
+
+
+threesets = ggplot(mapping = aes(x=x, y=y, color = set)) +
+    geom_point(data = newcorset[pickpoints,], mapping = aes(shape = set), alpha = I(1))+
+    geom_point(data = newmeans,  mapping = aes(shape = set), size = 5) +
+    geom_path(data = ellipsepoints, lty = 2, size = 1) +
+
+    theme_bw() +
+    theme(          legend.justification=c(0,1), legend.position=c(0.001,.999),
+          legend.text =element_text(size = 10), legend.title = element_blank(),
+          legend.background = element_rect(fill = "white", color = "black"), legend.box.background = element_rect(colour = "black")) +
+    coord_trans(x = "fisher", y = "fisher") +
+    labs(color = "Set", shape = "Set", x="5-10 frequency range",
+         y="10-20 frequency range" ) +
+    scale_y_continuous(breaks = c(-.15,0,.25,.5,.75,.90,.95,.99)) +
+    scale_x_continuous(breaks = c(-.25,0,.25,.5,.75,.90,.95,.99)) +
+    scale_color_manual(values = c("#1b9e77", "#d95f02", "#7570b3"))+
+    scale_fill_manual(values = c("#1b9e77", "#d95f02", "#7570b3"))+
+    NULL
+    threesets
+    
+library(Peacock.test) # https://www.sciencedirect.com/science/article/pii/S0167947316301785
+
+### NOTE: atanh of this will give the same values b/c it's a monotonic transformation
+### and this is a rank-based test
+print("Peacock test results:\n\n")
+    
+    
+peacock2((rot.one),(rot.two)) # [1] 0.2098765
+
+peacock2(rot.two,rot.three) # [1] 0.2469136
+
+peacock2(rot.one,rot.three) # [1] 0.3209877
+
+    
+    
+```
+
+
+
+
+
+
+```{r Nature-scatterplot, fig.height = 5, fig.width = 5}
+
+library(cowplot)
+totalcorset = totalcorset %>% mutate(nmatch = case_when(match == "match" ~ "match", match == "nonmatch" ~ "non-match"))
+smallcorset <- totalcorset %>% filter(set == "1")
+
+smallcorset$x = smallcorset$`5-10`
+smallcorset$y = smallcorset$`10-20`
+
+lineset <- smallcorset %>% filter(knife == "T10:T10") %>% arrange(x)
+totalcorset$x = totalcorset$`5-10`
+totalcorset$y = totalcorset$`10-20`
+
+
+########## variances (in transformed space)
+
+totalcorset$zx = atanh(totalcorset$x )
+totalcorset$zy = atanh(totalcorset$y )
+
+matchz = totalcorset %>% filter(nmatch == "match") %>% select(zx, zy) %>% colMeans()
+nonmatchz = totalcorset %>% filter(nmatch == "non-match") %>% select(zx, zy) %>% colMeans()
+
+matchzdf = data.frame(zx = rep(matchz[1], 100), zy = rep(matchz[2], 100))
+nonmatchzdf = data.frame(zx = rep(nonmatchz[1], 100), zy = rep(nonmatchz[2], 100))
+
+
+matchmean = tanh(matchz)
+names(matchmean) = c("x", "y")
+
+nonmatchmean = tanh(nonmatchz)
+names(nonmatchmean) = c("x", "y")
+
+matchvar = totalcorset %>% filter(match == "match") %>% select(zx, zy) %>% var
+
+nonmatchvar = totalcorset %>% filter(match == "nonmatch") %>% select(zx, zy) %>% var
+
+########### t distribution stuff
+library(mvtnorm) 
+
+nu <- 10
+rtsq <- rowSums(x = matrix(rt(n = 2e6, df = nu)^2, ncol = 2)) 
+
+
+############
+
+lineset <- totalcorset %>% filter(knife == "T10:T10") %>% arrange(x)
+
+
+newellipseplot = ggplot(mapping = aes(x=x, y=y)) +
+  geom_point(data = totalcorset, mapping = aes(shape = nmatch, color = nmatch, alpha = I(0.01)))+
+  guides(alpha=FALSE, fill = FALSE)+
+    theme_bw() +
+  theme(          legend.justification=c(0,1), legend.position=c(0,1),
+                  legend.text =element_text(size = 11), legend.title = element_blank(),
+                  legend.background = element_rect(fill = "white", color = "black"), axis.text.x = element_text( angle = 45, hjust = 1 ),
+                  legend.box.background = element_rect(colour = "black"),
+                  legend.spacing.y = unit(0, "mm")) +
+  labs(color = element_blank(), shape = element_blank(), x="5-10 frequency range",
+       y="10-20 frequency range" ) +
+  scale_y_continuous(trans = "fisher",breaks = c(-.15,0,.25,.5,.75,.90,.95,.99), limits = c(-.197,.96)) +
+  scale_x_continuous(trans = "fisher", breaks = c(-.25,0,.25,.5,.75,.90,.95,.99), limits = c(-.5,.995)) +
+  scale_color_manual(values = c("match" = "#7F2704", "non-match" = "#00441B"))+
+    scale_fill_manual(values = c("match" = "#7F2704", "non-match" = "#00441B"))+
+  NULL
+
+######### add ellipses
+
+
+for (i in seq(from = 0.10, to = 0.95, length.out = 50)) {    
+ 
+el.df <- data.frame(tanh((matchzdf) + ellipse(x = matchvar, t = sqrt(quantile(rtsq, probs = (i)))))) ## create the data for the given quantile of the ellipse.    
+el1.df <- data.frame(tanh((nonmatchzdf)+ellipse(x = nonmatchvar, t = sqrt(quantile(rtsq, probs = (i))))))
+names(el.df) <- c("x", "y")
+names(el1.df) <- c("x", "y")
+
+
+newellipseplot <- newellipseplot + 
+  geom_polygon(data=el.df, aes(x=x, y=y), fill = "#D94801", colour = NA, alpha = I(0.02)) + 
+  geom_polygon(data=el1.df, aes(x=x, y=y), fill = "#238B45", colour = NA, alpha = I(0.01))
+}
+
+###### add line, points back on top
+newellipseplot <- newellipseplot + 
+  geom_path(data = lineset, color = "blue") +
+  geom_point(data = totalcorset, mapping = aes(shape = nmatch, color = nmatch, alpha = I(0.6)))+
+  NULL
+  
+#########
+
+#newellipseplot
+xdens <- axis_canvas(newellipseplot, axis = 'x') + 
+  geom_histogram(data = totalcorset, mapping = aes(x = (x), after_stat(density), fill = nmatch, alpha = I(0.4)), position = 'identity') +
+  geom_density(data = totalcorset, mapping = aes(x = (x), color = nmatch))+
+  scale_fill_manual(values = c("match" = "#D94801", "non-match" = "#238B45"))+
+  scale_color_manual(values = c("match" = "#7F2704", "non-match" = "#00441B"))+
+  scale_x_continuous(trans = "fisher", limits = c(-.5,.995)) +
+  NULL
+ydens <- axis_canvas(newellipseplot, axis = 'y', coord_flip = TRUE) + 
+  geom_histogram(data = totalcorset, mapping = aes(x = (y), after_stat(density), fill = nmatch,  alpha = I(0.4)), position = 'identity') +
+  geom_density(data = totalcorset, mapping = aes(x = (y), color = nmatch))+
+  scale_fill_manual(values = c("match" = "#D94801", "non-match" = "#238B45"))+
+  scale_color_manual(values = c("match" = "#7F2704", "non-match" = "#00441B"))+
+  scale_x_continuous(trans = "fisher",breaks = c(-.15,0,.25,.5,.75,.90,.95,.99), limits = c(-.197,.96)) +
+  coord_flip() +
+  NULL
+onep1 <- insert_xaxis_grob(newellipseplot, xdens, grid::unit(.2, 'null'), position = "top")
+onep2 <- insert_yaxis_grob(onep1, ydens, grid::unit(.2, 'null'), position = 'right')
+ggdraw(onep2)
+
+
+```
+
+## Probability table
+
+This table is not in the supplement.
+
+```{r probs, asis=TRUE}
+invlogit = function(x) 1/(1+exp(-x))
+
+knitr::kable(finalodds %>% group_by(matching, sets, factordf) %>% 
+               filter(k == "2") %>%
+               summarize(max = round(max(invlogit(classes)),4), 
+                         min = round(min(invlogit(classes)), 4), 
+                         q_01 =  round(invlogit(quantile((classes), 0.01)), 4), 
+                         q_05 = round(invlogit(quantile((classes), 0.05)), 4), 
+                         q_95 = round(invlogit(quantile((classes), 0.95)), 4), 
+                         q_99 = round(invlogit(quantile((classes), 0.99)), 4) ),
+             caption = "Quantiles of classification probabilities (Min, Max, 0.01, 0.05, 0.95, and 0.99) for models trained on the 75%, 50%, and 0% overlap sets and tested with k = 2 images.")
+```
+
+
+```{r calibplot}
+dev_data=finalodds %>% mutate(pred = invlogit(classes)) %>%  
+  mutate(adj_pred = invlogit(classes+logit(.09413))) %>%  
+  filter(pred >.001, pred < .999) %>% 
+  mutate(y = case_when(
+    matching == "match" ~ 1,
+    TRUE ~ 0 ))
+
+ggplot(dev_data, aes(pred, y, color = factordf)) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "loess", se = FALSE, span = .06) +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  scale_color_brewer(palette="Dark2")+
+  xlab("Estimated Probability") +
+    theme_bw()+
+  ylab("Data w/ Empirical Proportion") +
+  labs(color = "DF")+
+    # ggtitle("Logistic Regression Calibration Plot") + 
+  NULL
+  
+ggsave("calibplot.pdf", height = 4, width = 5.5)  
+
+```
+
+
